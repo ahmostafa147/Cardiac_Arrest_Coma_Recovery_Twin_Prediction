@@ -15,6 +15,7 @@ Every stage runs from here; the build-dataset stage is skipped when its inputs
 are absent and the dataset already exists.
 """
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -66,6 +67,22 @@ def missing(paths):
     return [p for p in paths if not Path(p).exists()]
 
 
+def stale(needs, makes):
+    """
+    True when an output is older than an input, i.e. it was built from data
+    that has since been rebuilt. Existence alone is not enough: rebuilding the
+    dataset must invalidate everything downstream, or a run silently mixes a
+    new dataset with an old embedding.
+    """
+    if not makes:
+        return False
+    newest_in = max((Path(p).stat().st_mtime for p in needs if Path(p).exists()),
+                    default=0)
+    oldest_out = min((Path(p).stat().st_mtime for p in makes if Path(p).exists()),
+                     default=0)
+    return oldest_out < newest_in
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--force', action='store_true', help='recompute even if outputs exist')
@@ -100,13 +117,15 @@ def main():
             print(f'--- {name}: skipped, inputs missing')
             continue
         if makes and not a.force and not missing(makes):
-            results.append((name, 'CACHED', 0, ''))
-            print(f'--- {name}: up to date')
-            continue
-        print(f'--- {name} ...', flush=True)
+            if not stale(needs, makes):
+                results.append((name, 'CACHED', 0, ''))
+                print(f'--- {name}: up to date')
+                continue
+            print(f'--- {name}: inputs are newer than outputs, rebuilding')
+        print(f'\n{"=" * 62}\n== {name}\n{"=" * 62}', flush=True)
         t0 = time.time()
         r = subprocess.run([sys.executable, str(ROOT / 'scripts' / script)],
-                           cwd=ROOT)
+                           cwd=ROOT, env=os.environ)
         dt = time.time() - t0
         if r.returncode:
             results.append((name, 'FAIL', dt, f'exit {r.returncode}'))

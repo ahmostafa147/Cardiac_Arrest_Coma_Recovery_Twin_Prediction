@@ -23,6 +23,12 @@ from constants import (CLASS_NAMES, CLASS_COLORS, DISPLAY_ORDER, N_CLASSES,
                         OUTCOME_GOOD_RGB, OUTCOME_BAD_RGB)
 from config import prep, embeddings, FIG_CEBRA
 
+try:
+    from progress import done as _log_written
+except ImportError:
+    def _log_written(msg, p=None): print(f'  {msg}')
+
+
 # ── publication defaults ────────────────────────────────────────────
 FONT      = 'Arial'
 EXPORT_SCALE = 3          # ~600 dpi at the default pixel sizes
@@ -957,7 +963,7 @@ def export(fig, stem, out_dir=None, formats=('html', 'png', 'pdf'),
         else:
             fig.write_image(path, scale=scale)
         written.append(path)
-        print(f'  wrote {path}')
+        _log_written(f'wrote {os.path.basename(path)}', path)
     return written
 
 

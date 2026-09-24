@@ -1,18 +1,18 @@
-# Pinned to the versions this pipeline was actually verified on.
-# An unpinned install currently resolves to plotly 7 and pandas 3 — both major
-# bumps that were never tested here, and plotly 7 is the risk: the figures use
-# multiple named legends and 3-D scene APIs that changed across that boundary.
+# Verified on the versions in the right-hand comments. numpy and pandas are
+# left unpinned: cebra needs numpy<2 only on Windows, this code uses no
+# numpy-1-only APIs, and hard-pinning them downgrades Colab's preinstalled
+# stack and breaks binaries compiled against numpy 2.
 
-numpy==1.26.4
+numpy>=1.23              # tested 1.26.4
+pandas>=2,<3             # tested 2.3.3
 scipy==1.16.3
 scikit-learn==1.7.2
 torch==2.11.0
 cebra==0.6.0
-plotly==6.5.0
+plotly==6.5.0            # plotly 7 moved the APIs the figures use
 kaleido==1.3.0
 tqdm==4.67.1
 
-# only needed by scripts/06_embedding_eval.py
+# only needed by scripts/run_embedding_eval.py
 catboost==1.2.8
 matplotlib==3.10.7
-pandas==2.3.3

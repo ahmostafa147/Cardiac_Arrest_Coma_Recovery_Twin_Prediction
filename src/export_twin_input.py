@@ -11,10 +11,13 @@ Getting that backwards silently misaligns every segment.
 import numpy as np
 
 from config import PPNET_TRAIN, PPNET_TEST, embeddings, TWIN_NPZ
+from progress import step, done, log
 
 if __name__ == '__main__':
+    log('export for twin')
     for split in ('train', 'test'):
         src = PPNET_TRAIN if split == 'train' else PPNET_TEST
+        step(f'{split}: reading {src.name}')
         d = np.load(src, allow_pickle=True)
         emb = np.load(embeddings(split))['embedding']
 
@@ -31,4 +34,4 @@ if __name__ == '__main__':
         out['cebra_embedding'] = emb_original_order
         dst = TWIN_NPZ[split]
         np.savez(dst, **out)
-        print(f'  wrote {dst}  ({emb_original_order.shape}, {len(out)} arrays)')
+        done(f'{split}: {emb_original_order.shape[0]:,} rows, {len(out)} arrays', dst)

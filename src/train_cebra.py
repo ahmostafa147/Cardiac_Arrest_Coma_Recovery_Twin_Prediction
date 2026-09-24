@@ -25,6 +25,7 @@ from sklearn.neighbors import NearestNeighbors
 from tqdm import trange
 
 from config import prep, embeddings, MODELS_DIR
+from progress import step as _step, done, log
 from config import TRAIN as _C
 
 # ── CONFIG ──────────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ device = ("cuda" if torch.cuda.is_available()
 print(f"  device: {device}")
 
 # ── Load preprocessed data ─────────────────────────────────────────
-print(f"=== Loading (RUN_TAG={RUN_TAG}) ===")
+log('train CEBRA')
 d = np.load(prep('train'), allow_pickle=True)
 X_train    = d['X'].astype(np.float32)
 pat_starts = d['pat_starts']
@@ -120,7 +121,7 @@ def get_batch(idx, X_t, starts_t, ends_t):
     return X_t[expand_idx(idx, starts_t, ends_t)].transpose(2, 1)
 
 # ── Training ───────────────────────────────────────────────────────
-print(f"\n=== Training ({n_obj} objectives, MAX_ITER={MAX_ITER}) ===")
+_step(f'{n_obj} objectives · {MAX_ITER} iterations · batch {BATCH_SIZE} · device {device}')
 print(f"  TIME_OFFSET={TIME_OFFSET} bins ({TIME_OFFSET*5} min)")
 print(f"  TEMP={TEMPERATURE}  NUM_UNITS={NUM_UNITS}  LR={LR}")
 
@@ -182,10 +183,10 @@ def compute_emb(X_arr, starts, ends, batch=4096):
             out.append(model(get_batch(idx, X_t, s_t, e_t)).cpu().numpy())
     return np.concatenate(out, axis=0)
 
-print("\nComputing train embeddings...")
+_step('embedding train split')
 X_train_emb = compute_emb(X_train, pat_starts, pat_ends)
 
-print("Computing test embeddings...")
+_step('embedding test split')
 d_test = np.load(prep('test'), allow_pickle=True)
 X_test_emb = compute_emb(d_test['X'].astype(np.float32),
                          d_test['pat_starts'], d_test['pat_ends'])
@@ -195,4 +196,4 @@ np.savez(embeddings('train'), embedding=X_train_emb)
 np.savez(embeddings('test'),  embedding=X_test_emb)
 torch.save(model.state_dict(), MODELS_DIR / 'cebra_model.pt')
 
-print(f"\nDone. Train: {X_train_emb.shape}  Test: {X_test_emb.shape}")
+done(f'train {X_train_emb.shape}  test {X_test_emb.shape}', embeddings('train').parent)

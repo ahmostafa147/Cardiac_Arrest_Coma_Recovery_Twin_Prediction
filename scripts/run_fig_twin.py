@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import figures as cf
+from progress import log
 import twin as tf
 
 from config import RUN_TAG
@@ -58,6 +59,7 @@ def resolve(pid, want_good, twin):
 
 
 if __name__ == '__main__':
+    log('Figure 2 twin')
     run  = cf.load_run(RUN_TAG)
     twin = tf.load_twin()
 

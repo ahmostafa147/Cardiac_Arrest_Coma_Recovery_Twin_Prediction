@@ -17,6 +17,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from config import PPNET_TRAIN, PPNET_TEST, prep, MODELS_DIR
+from progress import step, done, log
 from config import PREP as _C
 
 # ── CONFIG ──────────────────────────────────────────────────────────
@@ -31,7 +32,7 @@ BIN_SEC = _C['BIN_SEC']
 np.random.seed(SEED)
 
 # ── Load ────────────────────────────────────────────────────────────
-print(f"=== Loading (RUN_TAG={RUN_TAG}) ===")
+log('CEBRA features')
 train_data = np.load(PPNET_TRAIN, allow_pickle=True)
 test_data  = np.load(PPNET_TEST,  allow_pickle=True)
 
@@ -43,7 +44,7 @@ for name, d in [("TRAIN", train_data), ("TEST", test_data)]:
     print(f"  patients: {len(np.unique(d['patient_ids']))}")
 
 # ── Sort by (patient_id, time) → contiguous patients + temporal order
-print("\n=== Sorting by (patient_id, time) ===")
+step('sorting by (patient, time)')
 def get_order(d):
     return np.lexsort((d['times'].astype(float), d['patient_ids']))
 
@@ -54,7 +55,7 @@ def take(d, k, order):
     return d[k][order]
 
 # ── Build X by concatenating selected feature blocks ────────────────
-print(f"\n=== Building X from {FEATURE_KEYS} ===")
+step(f'building X from {FEATURE_KEYS}')
 blocks_train, blocks_test = [], []
 pca = None
 scalers = {}
@@ -107,7 +108,7 @@ X_test  = np.concatenate(blocks_test,  axis=1) if len(blocks_test)  > 1 else blo
 print(f"\n  X_train: {X_train.shape}, X_test: {X_test.shape}")
 
 # ── Patient boundaries (contiguity guaranteed by lexsort) ───────────
-print("\n=== Patient boundaries ===")
+step('computing patient boundaries')
 def compute_boundaries(pids):
     unique_pids, inverse = np.unique(pids, return_inverse=True)
     N = len(pids)
@@ -127,7 +128,7 @@ print(f"  Train: {len(np.unique(pid_train))} patients, {len(pid_train)} bins")
 print(f"  Test:  {len(np.unique(pid_test))} patients, {len(pid_test)} bins")
 
 # ── Save ────────────────────────────────────────────────────────────
-print("\n=== Saving ===")
+step('saving')
 def save_split(path, X, d, order, pat_starts, pat_ends):
     cpc = take(d, 'cpc_scores', order).astype(np.float32)
     cpc_binary = (cpc >= 3).astype(np.int64)   # 0 = good (CPC<=2), 1 = poor (CPC>=3)
@@ -162,4 +163,4 @@ with open(MODELS_DIR / 'cebra_scaler.pkl', 'wb') as f:
         'bin_sec':        BIN_SEC,
     }, f)
 
-print(f"Done. {prep('train')}, {prep('test')}")
+done('prep written', prep('train').parent)

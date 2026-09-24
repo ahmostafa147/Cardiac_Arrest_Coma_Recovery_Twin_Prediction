@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
 import figures as cf
+from progress import log
 from constants import CLASS_NAMES
 
 from config import RUN_TAG
@@ -20,6 +21,7 @@ WINDOW      = 24
 STEM        = None   # set from PID below
 
 if __name__ == '__main__':
+    log('prototype figure')
     run = cf.load_run(RUN_TAG)
     if PID not in run['test']['pid'] and PID not in run['train']['pid']:
         import numpy as _np

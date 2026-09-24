@@ -26,6 +26,7 @@ from joblib import Parallel, delayed
 import warnings
 
 from config import PREPROCESS as _P, DATASET_DIR
+from progress import step, done, log
 
 warnings.filterwarnings(action='ignore', message='Mean of empty slice')
 
@@ -39,13 +40,21 @@ for _k, _v in _need.items():
         if not os.path.exists(_p):
             _missing.append(f'  {_k:16s} {_p}')
 if _missing:
-    print('Cannot build the dataset — missing inputs:\n' + '\n'.join(_missing))
-    print('\nSee data/README.md. Nothing was written.')
+    log('cannot build the dataset — missing inputs:')
+    for _m in _missing:
+        log(_m, indent=1)
+    log('see data/README.md. Nothing was written.')
     sys.exit(1)
 
 N = _P['EPOCHS_PER_SEGMENT']
 SEC_PER_CHUNK = _P['SEC_PER_CHUNK']
 MAX_CHUNK = _P['MAX_CHUNK']
+
+log('build dataset')
+step(f"protopnet  {sum(len(list(__import__('pathlib').Path(d).glob('*.npz'))) for d in _P['PROTOPNET_DIRS'])} npz "
+     f"across {len(_P['PROTOPNET_DIRS'])} sites")
+step(f"qeeg       {len(list(__import__('pathlib').Path(_P['BCI_CSV_DIR']).glob('*.csv')))} csv")
+step(f"segments   {N} epochs x 50 s = {N * 50} s")
 
 cebra_cols = [
     'corrmean', 'meanskewamp', 'sdspectent', 'shanavg', 
@@ -70,7 +79,8 @@ def process_patient_file(file, npz_dir, offsets, cpc_dict, bci_csv_dir, cebra_co
     patient_id = "_".join(file_base.split('_')[:2]) 
     bci_csv_path = os.path.join(bci_csv_dir, f"{patient_id}_rel10s_with_spike.csv")
     
-    if not os.path.exists(bci_csv_path): return None
+    if not os.path.exists(bci_csv_path):
+        return {'_skip': 'no qEEG csv', 'pid': patient_id}
         
     try:
         with np.load(os.path.join(npz_dir, file)) as data:
@@ -86,7 +96,8 @@ def process_patient_file(file, npz_dir, offsets, cpc_dict, bci_csv_dir, cebra_co
         
         df_bci = pd.read_csv(bci_csv_path)
         df_file_bci = df_bci[df_bci['file'].str.contains(file_base, na=False)].sort_values('rel_sec')
-        if df_file_bci.empty: return None
+        if df_file_bci.empty:
+            return {'_skip': 'qEEG csv has no rows for this recording', 'pid': patient_id}
             
         bci_aligned = df_file_bci['BCI'].values 
         # Pre-allocate a NaN array with the strict number of required columns
@@ -101,7 +112,8 @@ def process_patient_file(file, npz_dir, offsets, cpc_dict, bci_csv_dir, cebra_co
         
         bci_equivalent_rows = len(bci_aligned) // 5
         min_len = min(feat.shape[0], bci_equivalent_rows)
-        if min_len == 0: return None
+        if min_len == 0:
+            return {'_skip': 'no overlapping epochs', 'pid': patient_id}
         
         feat = feat[:min_len]
         pred = pred[:min_len]
@@ -173,8 +185,7 @@ def process_patient_file(file, npz_dir, offsets, cpc_dict, bci_csv_dir, cebra_co
         }
         
     except Exception as e:
-        print(f"Error loading {file}: {e}")
-        return None
+        return {'_skip': f'error: {type(e).__name__}: {e}', 'pid': patient_id}
 
 # --- 3. Parallel Execution Setup ---
 
@@ -186,7 +197,7 @@ for npz_dir in npz_directories:
             if file.endswith(".npz") and file.replace(".npz", "") in offsets:
                 tasks.append((file, npz_dir))
 
-print(f"Found {len(tasks)} files to process. Starting parallel extraction...")
+step(f'{len(tasks)} recordings to aggregate — parallel across all cores')
 
 # Execute parallel pool (n_jobs=-1 uses all available CPU cores)
 results = Parallel(n_jobs=-1, verbose=10)(
@@ -195,10 +206,24 @@ results = Parallel(n_jobs=-1, verbose=10)(
 )
 
 # --- 4. Stack, Filter, and Chronologically Sort ---
-print("Aggregation complete. Stacking arrays...")
+from collections import Counter as _C
+_skipped = [r for r in results if r is not None and '_skip' in r]
+_kept = [r for r in results if r is not None and '_skip' not in r]
+step(f'aggregated {len(_kept)}/{len(tasks)} recordings')
+if _skipped:
+    step(f'{len(_skipped)} skipped:')
+    for _why, _n in _C(r['_skip'] for r in _skipped).most_common():
+        _pids = sorted({r['pid'] for r in _skipped if r['_skip'] == _why})
+        _shown = ', '.join(_pids[:6]) + (f' (+{len(_pids) - 6} more)' if len(_pids) > 6 else '')
+        step(f'  {_n:4d}  {_why}')
+        step(f'        {_shown}')
+_lost = sorted({r['pid'] for r in _skipped} - {r['pats'][0] for r in _kept})
+if _lost:
+    step(f'{len(_lost)} patients lost entirely (no usable recording)')
+step(f'stacking 11 arrays over {len(_kept)} recordings — a couple of minutes, no output')
 
 # Filter out None results from files that failed or were skipped
-valid_results = [r for r in results if r is not None]
+valid_results = _kept
 
 final_time_chunks = np.concatenate([r['chunks'] for r in valid_results])
 final_times       = np.concatenate([r['times'] for r in valid_results])
@@ -230,8 +255,9 @@ ALL = dict(features=final_features, predictions=final_predictions,
            resolutions=final_resolutions, patient_ids=final_patient_ids,
            cpc_scores=final_cpc)
 ALL = {k: v[final_idx] for k, v in ALL.items()}
-print(f'aggregated {ALL["predictions"].shape[0]} segments, '
-      f'{len(np.unique(ALL["patient_ids"]))} patients')
+step(f'{ALL["predictions"].shape[0]:,} segments from '
+     f'{len(np.unique(ALL["patient_ids"]))} patients '
+     f'(chunks >= {MAX_CHUNK} dropped)')
 
 
 def _ids(path):
@@ -243,10 +269,11 @@ def _ids(path):
     return df.iloc[:, 0].astype(str).values
 
 
+step('splitting and writing')
 for name, ids in (('train', _ids(_P['TRAIN_IDS'])), ('test', _ids(_P['TEST_IDS']))):
     m = np.isin(ALL['patient_ids'].astype(str), ids)
     out = {k: v[m] for k, v in ALL.items()}
     dst = DATASET_DIR / f'PPNet_data_{name}.npz'
     np.savez_compressed(dst, **out)
-    print(f'  wrote {dst}  {out["predictions"].shape[0]} segments, '
-          f'{len(np.unique(out["patient_ids"]))} patients')
+    done(f'{name}: {out["predictions"].shape[0]:,} segments, '
+         f'{len(np.unique(out["patient_ids"]))} patients', dst)

@@ -23,6 +23,7 @@ _plt.show = lambda *a, **k: None          # headless: never block on a figure
 from pathlib import Path
 from config import (TWIN_TRAIN as _TT, TWIN_INPUT_DIR, TWIN_HANDOFF_DIR,
                     CLINICAL_CSV, MODELS_DIR, METRICS_DIR, FIG_TWIN)
+from progress import bar as _bar, step as _pstep
 
 DATA_DIR = TWIN_INPUT_DIR
 OUT_DIR = TWIN_HANDOFF_DIR
@@ -529,7 +530,9 @@ def reliab(y, p, nb=10):
 # ===================== cell 15 =====================
 # Train the reference transformer (distillation teacher); its hour-by-hour AUC and soft per-block targets
 # train the reference-model ensemble = the distillation TEACHER (anytime-trained)
-REFM = [train_seed(CFG, sd, XB_tr, M_ms_tr, C_train_s, y_train, IIIC_TR, N_FEAT, TF_MEAN, TF_STD, anytime_aug=True) for sd in range(7, 7 + 10 * N_REF, 10)]
+_pstep(f'reference transformer: {N_REF} seeds')
+REFM = [train_seed(CFG, sd, XB_tr, M_ms_tr, C_train_s, y_train, IIIC_TR, N_FEAT, TF_MEAN, TF_STD, anytime_aug=True)
+        for sd in _bar(range(7, 7 + 10 * N_REF, 10), 'reference seeds', total=N_REF, unit='seed')]
 # teacher's hour-by-hour test prediction (TTA-averaged across seeds)
 ref_hourly = {h: np.nanmean([predict_hourly(m, XB_te, M_ms_te, C_test_s, KS, TF_MEAN, TF_STD)[h] for m in REFM], 0) for h in KS}
 covO = {h: (M_ms_te[:, :h2slot(h)].sum(1) > 0) for h in KS}
@@ -554,7 +557,9 @@ Xf_te, FT_te, bmte = make_features(BREF, X_ms_te, M_ms_te, C_test_s)
 # per-block IIIC label frequencies = the twin's auxiliary target
 AUXTR = _bmean(X_ms_tr, M_ms_tr, PROBS_CH)[0]; lb = last_block(bmte)
 # train the distilled digital-twin ensemble (THE deliverable model)
-TW = [train_twin(CFG2, sd, Xf_tr, bmtr, FT_tr, y_train, AUX=AUXTR, soft=SOFT_TR, **TWIN_CFG) for sd in range(7, 7 + 10 * N_TWIN, 10)]
+_pstep(f'digital twin: {N_TWIN} seeds')
+TW = [train_twin(CFG2, sd, Xf_tr, bmtr, FT_tr, y_train, AUX=AUXTR, soft=SOFT_TR, **TWIN_CFG)
+      for sd in _bar(range(7, 7 + 10 * N_TWIN, 10), 'twin seeds', total=N_TWIN, unit='seed')]
 # the twin's full-data per-block P(good) for every test patient
 tw_prob = 1 / (1 + np.exp(-np.mean([predict_twin(m, Xf_te, bmte)[0] for m in TW], 0)))
 # which summary-vector columns belong to each feature group (for Figure 3)
@@ -634,9 +639,13 @@ print({k: round(v, 1) for k, v in skill.items()})
 # Figure 4 — held-out outcome calibration (temperature scaling)
 # hold out a calibration fold; the teacher + twin here are trained WITHOUT it (leakage-clean)
 rng = np.random.RandomState(0); perm = rng.permutation(len(y_train)); cal_i = perm[:len(y_train)//5]; fit_i = perm[len(y_train)//5:]
-RC = [train_seed(CFG, sd, XB_tr[fit_i], M_ms_tr[fit_i], C_train_s[fit_i], y_train[fit_i], IIIC_TR[fit_i], N_FEAT, TF_MEAN, TF_STD, anytime_aug=True) for sd in range(7, 7 + 10 * N_CAL, 10)]
+_pstep(f'calibration reference: {N_CAL} seeds')
+RC = [train_seed(CFG, sd, XB_tr[fit_i], M_ms_tr[fit_i], C_train_s[fit_i], y_train[fit_i], IIIC_TR[fit_i], N_FEAT, TF_MEAN, TF_STD, anytime_aug=True)
+      for sd in _bar(range(7, 7 + 10 * N_CAL, 10), 'calibration seeds', total=N_CAL, unit='seed')]
 SOFT_FIT = ref_soft_blocks(RC, XB_tr[fit_i], M_ms_tr[fit_i], C_train_s[fit_i])
-TWC = [train_twin(CFG2, sd, Xf_tr[fit_i], bmtr[fit_i], FT_tr[fit_i], y_train[fit_i], AUX=AUXTR[fit_i], soft=SOFT_FIT, **TWIN_CFG) for sd in range(7, 7 + 10 * N_CAL, 10)]
+_pstep(f'calibration twin: {N_CAL} seeds')
+TWC = [train_twin(CFG2, sd, Xf_tr[fit_i], bmtr[fit_i], FT_tr[fit_i], y_train[fit_i], AUX=AUXTR[fit_i], soft=SOFT_FIT, **TWIN_CFG)
+       for sd in _bar(range(7, 7 + 10 * N_CAL, 10), 'calibration twin seeds', total=N_CAL, unit='seed')]
 def sig(z): return 1 / (1 + np.exp(-z))
 # fit one temperature on the held-out fold (grid search minimizing BCE)
 def fit_T(logit, y):
