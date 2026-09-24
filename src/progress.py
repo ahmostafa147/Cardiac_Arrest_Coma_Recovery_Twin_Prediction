@@ -62,5 +62,5 @@ def bar(it, desc, total=None, unit='it'):
     """tqdm when available, a plain counter when not."""
     if tqdm is not None:
         return tqdm(it, desc='  ' * (_depth + 1) + desc, total=total,
-                    unit=unit, file=sys.stdout, dynamic_ncols=True, leave=False)
+                    unit=unit, file=sys.stdout, dynamic_ncols=True, leave=True)
     return it

@@ -97,12 +97,33 @@ keep state structure while the line stays smooth.
 **Determinism.** Seed 42; the CEBRA steps reproduce the embedding bit-for-bit
 on the same device.
 
+## Reproduction
+
+Rebuilt end to end from prototype-network outputs — dataset, CEBRA embedding,
+and ~110 transformer trainings — and it lands on the published numbers:
+
+| | Published | This pipeline |
+|---|---|---|
+| Twin AUROC @84h | 0.939 | 0.9394 |
+| Reference transformer | 0.935 | 0.9363 |
+| AUPRC | 0.892 | 0.8932 |
+| Brier, raw -> temp-scaled | 0.125 -> 0.106 | 0.125 -> 0.104 |
+| Temperature | 0.6 | 0.60 |
+| Sensitivity / specificity @0.5 | 0.922 / 0.807 | 0.922 / 0.802 |
+| TPR @ FPR<=0.05 | 0.766 | 0.762 |
+| Cohort | 695 / 299 | 695 / 299 |
+
+Cost: ~6 min to build the dataset, ~6 min for CEBRA, ~15 h for the twin on one
+GPU. The ablation figure dominates that last number -- it retrains a 10-seed
+ensemble per feature set. Set `TWIN_TRAIN['N_ABL']` lower in `src/config.py` to
+trade Figure 1's error bars for hours.
+
 ## Limits
 
-- The build-dataset step has run only against synthetic inputs. On the first
-  real run, check its output for all-NaN qEEG columns — unrecognised column
-  names are filled with NaN silently.
-- The twin has trained only at smoke scale (4 patients, 1 seed, 1 epoch).
+- `build_dataset` fills unrecognised qEEG columns with NaN silently. It now
+  reports every skipped recording and why, so check that tally on a first run.
+
 - Prototype-network training is not in this repo; its outputs are an input.
-- Tested on macOS/ARM, Python 3.11.5 only.
+- Run on macOS/ARM (Python 3.11, numpy 1.26) and Colab Linux (Python 3.13,
+  numpy 2.x, CUDA). Windows untested.
 - 45 prototypes span 7 of the 8 phenotypes; none codes for Discontinuous.

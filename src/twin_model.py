@@ -19,8 +19,15 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as _plt
 _plt.show = lambda *a, **k: None          # headless: never block on a figure
 
+from progress import log as _plog
+
+
+def _stage(k, n, what):
+    """Announce a block, so a two-hour run is not a black box."""
+    _plog(f'[{k:2d}/{n}] {what}')
+
 # ===================== cell 2 =====================
-from pathlib import Path
+_stage(1, 27, 'paths')
 from config import (TWIN_TRAIN as _TT, TWIN_INPUT_DIR, TWIN_HANDOFF_DIR,
                     CLINICAL_CSV, MODELS_DIR, METRICS_DIR, FIG_TWIN)
 from progress import bar as _bar, step as _pstep
@@ -36,6 +43,7 @@ print('twin outputs:', OUT_DIR)
 
 
 # ===================== cell 3 =====================
+_stage(2, 27, 'imports and device')
 # Library imports and compute device
 import json, time, gc, random, warnings
 import numpy as np, pandas as pd
@@ -52,6 +60,7 @@ DEVICE = torch.device(_dev) if _dev else torch.device('cuda' if torch.cuda.is_av
 print('device:', DEVICE)
 
 # ===================== cell 4 =====================
+_stage(3, 27, 'load features, build multi-stream arrays')
 # Load frozen ProtoPNet/CEBRA/EEG/clinical features; build the per-5-min multistream with 8-class IIIC labels; fit train scalers; official 695/299 split
 # qEEG temporal summary per patient: [mean, std, slope, last] over the observed 5-min segments
 def compute_temporal_features(X, M):
@@ -154,6 +163,7 @@ if _TT.get('SUBSET'):
     print(f'*** SUBSET {len(y_train)} train / {len(y_test)} test — SMOKE TEST, NOT SCIENCE ***')
 
 # ===================== cell 5 =====================
+_stage(4, 27, 'reference hyperparameters')
 # Reference outcome-transformer hyperparameters
 CFG = dict(d_model=256, n_blocks=5, n_queries=32, n_heads=8, ffn_expand=2, dropout=0.27, drop_path=0.11,
            mixup_alpha=0.54, mask_pct=0.18, num_masks=2, label_smoothing=0.067, lr=4.9e-4, batch_size=16,
@@ -191,10 +201,14 @@ print('helpers ready.')
 if _TT.get('MAX_EPOCHS'):
     for _k in list(CFG):
         if 'epoch' in _k.lower(): CFG[_k] = int(_TT['MAX_EPOCHS'])
+    _CFG2_EPOCH_CAP = int(_TT['MAX_EPOCHS'])      # CFG2 is defined later
     print('epoch cap ->', _TT['MAX_EPOCHS'])
+else:
+    _CFG2_EPOCH_CAP = None
 
 
 # ===================== cell 6 =====================
+_stage(5, 27, 'reference architecture')
 # Reference outcome-transformer architecture (5-min-token cross-attention model)
 # stochastic-depth regularizer
 class DropPath(nn.Module):
@@ -245,6 +259,7 @@ class OutcomeTransformer(nn.Module):
 print('OutcomeTransformer ready.')
 
 # ===================== cell 7 =====================
+_stage(6, 27, 'reference trainer')
 # Reference transformer: causal input builder, training loop, TTA + hour-by-hour prediction
 CUTOFF_HOURS = [6, 12, 18, 24, 36, 48, 72, 84]; SLOTS_PER_HOUR = 12
 def h2slot(h): return min(SEQ_LEN, int(round(h * SLOTS_PER_HOUR)))
@@ -332,6 +347,7 @@ def predict_hourly(model, Xb, M, C, cutoffs, tf_mean=None, tf_std=None, use_temp
 print('trainer ready.')
 
 # ===================== cell 9 =====================
+_stage(7, 27, 'block summary features')
 # Step 3 — per-1h-block interpretable summary features (block means + within/causal-prefix trends + PCA + clinical)
 # aggregate the 1008 five-min slots into 84 one-hour blocks (the twin's timestep)
 BLK = 84; BSZ = SEQ_LEN // BLK
@@ -407,6 +423,7 @@ def make_features(refs, X_ms, M, clin):
 print('block builders ready (compact / rich / rich_prefix).')
 
 # ===================== cell 11 =====================
+_stage(8, 27, 'twin model and trainer')
 # Step 4 — digital-twin transformer (dual-head causal model) + trainer + roll-forward simulation
 # index of each patient's last observed block
 def last_block(BM): return np.where(BM > 0, np.arange(BM.shape[1])[None, :], -1).max(1)
@@ -428,6 +445,8 @@ class TwinTransformer(nn.Module):
         h = self.norm(self.enc(h, mask=self.cmask))
         return self.outcome(h).squeeze(-1), x[:, :, :self.roll_dim] + self.delta_head(h), h, self.iiic(h)
 CFG2 = dict(nlayers=4, nheads=8, dropout=0.2, lr=1e-3, weight_decay=1e-4, epochs=70, batch=32, lam_fc=1.5, ss_prob=0.6, ss_w=0.7, ss_R=18, ls=0.05, feat_drop=0.1, blk_drop=0.1, iiic_w=0.3, ema=0.998)
+if _CFG2_EPOCH_CAP:
+    CFG2['epochs'] = _CFG2_EPOCH_CAP
 # distillation loss: match the reference teacher's soft outcome (kdbce / logit-MSE / KL)
 def distill_term(out, soft, mode, T):
     soft = soft.clamp(1e-4, 1 - 1e-4); zt = torch.log(soft / (1 - soft))
@@ -510,6 +529,7 @@ def twin_hourly(mods, Xf, BM, cutoffs):
     return res
 
 # ===================== cell 13 =====================
+_stage(9, 27, 'seed configuration')
 # Configuration — seed counts (2 for dev, raise to 10 for final) and distillation settings
 # seed counts: 2 for quick dev; raise to ~10 for the final figures
 N_REF = int(_TT.get('N_REF', 10))
@@ -528,6 +548,7 @@ def reliab(y, p, nb=10):
     return np.array(xs), np.array(ys)
 
 # ===================== cell 15 =====================
+_stage(10, 27, 'TRAIN reference transformer')
 # Train the reference transformer (distillation teacher); its hour-by-hour AUC and soft per-block targets
 # train the reference-model ensemble = the distillation TEACHER (anytime-trained)
 _pstep(f'reference transformer: {N_REF} seeds')
@@ -549,6 +570,7 @@ SOFT_TR = ref_soft_blocks(REFM, XB_tr, M_ms_tr, C_train_s)
 print('reference @84h', round(REF_HOURLY[84], 4))
 
 # ===================== cell 17 =====================
+_stage(11, 27, 'TRAIN digital twin')
 # Build block features and train the distilled digital twin (seed ensemble)
 # fit the Step-3 block features on TRAIN (causal-prefix variant)
 BREF = fit_refs('rich_prefix', X_ms_tr, M_ms_tr)
@@ -567,6 +589,7 @@ GROUPS = {'IIIC probs': slice(0, 8), 'qEEG': slice(8, 21), 'prototype acts': sli
 print('twin trained', len(TW), 'seeds')
 
 # ===================== cell 19 =====================
+_stage(12, 27, 'Figure 1 — input ablation (RETRAINS PER FEATURE SET, the longest block)')
 # Figure 1 — input ablation: outcome AUC + calibration per feature set
 # clinical-only baseline = simple logistic regression
 from sklearn.linear_model import LogisticRegression
@@ -591,7 +614,8 @@ def scenario(streams, use_clin, has_eeg):
 SPEC = {'ProtoPNet': (['ppnet'], False, False), 'CEBRA': (['cebra'], False, False), 'EEG': (['eeg'], False, True), 'Clinical': (None, False, False),
         'ProtoPNet+EEG': (['ppnet', 'eeg'], False, True), 'ProtoPNet+Clinical': (['ppnet'], True, False), 'ProtoPNet+EEG+Clinical': (['ppnet', 'eeg'], True, True),
         'CEBRA+EEG': (['cebra', 'eeg'], False, True), 'CEBRA+Clinical': (['cebra'], True, False), 'CEBRA+EEG+Clinical': (['cebra', 'eeg'], True, True)}
-SC = {k: scenario(*v) for k, v in SPEC.items()}
+SC = {k: scenario(*v) for k, v in
+      _bar(list(SPEC.items()), 'ablation feature sets', total=len(SPEC), unit='set')}
 ROWS = [('Individual streams', ['ProtoPNet', 'CEBRA', 'EEG', 'Clinical']),
         ('ProtoPNet combinations', ['ProtoPNet', 'ProtoPNet+EEG', 'ProtoPNet+Clinical', 'ProtoPNet+EEG+Clinical']),
         ('CEBRA combinations', ['CEBRA', 'CEBRA+EEG', 'CEBRA+Clinical', 'CEBRA+EEG+Clinical'])]
@@ -610,6 +634,7 @@ fig.tight_layout(rect=[0, 0, 1, 0.975]); fig.savefig(FIG_TWIN / 'fig1.png', dpi=
 print({k: round(SC[k][0][-1], 3) for k in SPEC})
 
 # ===================== cell 21 =====================
+_stage(13, 27, 'Figure 2 — per-block AUC')
 # Figure 2 — per-block outcome AUC, twin vs reference transformer
 # twin vs reference: hour-by-hour outcome AUC
 tw_h = twin_hourly(TW, Xf_te, bmte, KS)
@@ -622,6 +647,7 @@ fig.tight_layout(); fig.savefig(FIG_TWIN / 'fig2.png', dpi=130); plt.show()
 print({h: round(tw_h[h], 3) for h in KS})
 
 # ===================== cell 23 =====================
+_stage(14, 27, 'Figure 3 — forecast skill')
 # Figure 3 — forecast head skill vs persistence
 # only score forecasts between consecutive observed blocks
 fmask = (bmte[:, :-1] * bmte[:, 1:]).astype(bool); fc = np.mean([predict_twin(m, Xf_te, bmte)[1] for m in TW], 0)
@@ -636,6 +662,7 @@ fig.tight_layout(); fig.savefig(FIG_TWIN / 'fig3.png', dpi=130); plt.show()
 print({k: round(v, 1) for k, v in skill.items()})
 
 # ===================== cell 25 =====================
+_stage(15, 27, 'Figure 4 — calibration (TRAINS two more ensembles)')
 # Figure 4 — held-out outcome calibration (temperature scaling)
 # hold out a calibration fold; the teacher + twin here are trained WITHOUT it (leakage-clean)
 rng = np.random.RandomState(0); perm = rng.permutation(len(y_train)); cal_i = perm[:len(y_train)//5]; fit_i = perm[len(y_train)//5:]
@@ -666,6 +693,7 @@ fig.tight_layout(); fig.savefig(FIG_TWIN / 'fig4.png', dpi=130); plt.show()
 print(f'Brier {b_raw:.3f} -> {b_cal:.3f} (T={T:.2f})')
 
 # ===================== cell 27 =====================
+_stage(16, 27, 'Figure 5 — roll-forward')
 # Figure 5 — digital-twin roll-forward from 6 h of EEG
 # roll the twin forward from the first 6 h of EEG
 K_OBS = 6; obs_blk = bmte.sum(1); plast = tw_prob[np.arange(len(y_test)), lb]; e6 = bmte[:, :K_OBS].sum(1) > 0
@@ -690,6 +718,7 @@ fig.suptitle('Figure 5 — Digital twin roll-forward (from 6 h of EEG)'); fig.ti
 print([TEST_PIDS[i] for i in (cg, cp, cg2)])
 
 # ===================== cell 29 =====================
+_stage(17, 27, 'Figure 6 — overview spaghetti')
 # Figure 6 — overview spaghetti (left) + per-window small multiples (right)
 obs_blk = bmte.sum(1); plast = tw_prob[np.arange(len(y_test)), lb]
 cand = np.where((y_test == 1) & (obs_blk >= 60) & (bmte[:, :6].sum(1) > 0) & (plast > 0.85))[0]
@@ -736,6 +765,7 @@ fig.savefig(FIG_TWIN / 'fig6.png', dpi=130, bbox_inches='tight'); plt.show()
 print('Figure 6 patient:', TEST_PIDS[EX])
 
 # ===================== cell 31 =====================
+_stage(18, 27, 'Figure 7 — label-frequency forecast')
 # Figure 7 — forecast head vs actual: IIIC label-frequency trajectories (black = actual, colored = forecast from 12h/24h)
 obs_blk = bmte.sum(1); plast = tw_prob[np.arange(len(y_test)), lb]
 cand = np.where((y_test == 1) & (obs_blk >= 60) & (bmte[:, :6].sum(1) > 0) & (plast > 0.85))[0]
@@ -777,6 +807,7 @@ print('Figure 7 patient:', TEST_PIDS[EX])
 
 
 # ===================== cell 33 =====================
+_stage(19, 27, 'summary metrics')
 # Summary metrics and the Step-4 output structure handed to Steps 5-6
 coh = bmte[:, :12].sum(1) > 0
 # twin roll-forward gain at 12 h (roll-forward outcome vs direct outcome)
@@ -790,6 +821,7 @@ print('  trajectory embedding predict_twin(m, Xf, BM)[2]  shape (N, 84, d)  -> s
 print('  IIIC label stream is 8-class:', ['Burst Suppression','Seizure','LPD','GPD','LRDA','GRDA','Continuous','Discontinuous'])
 
 # ===================== cell 35 =====================
+_stage(20, 27, 'write step4 handoff + models')
 import pickle
 CLASS_NAMES = ['Burst Suppression', 'Seizure', 'LPD', 'GPD', 'LRDA', 'GRDA', 'Continuous', 'Discontinuous']
 def _ens_out(Xf, BM):
@@ -813,6 +845,7 @@ B = dict(
     labelfreq_train=freq_tr, labelfreq_test=freq_te, labelseq_train=seq_tr, labelseq_test=seq_te,
     clin_norm_train=C_train_s.astype(np.float32), clin_norm_test=C_test_s.astype(np.float32),
     clin_raw_train=C_train.astype(np.float32), clin_raw_test=C_test.astype(np.float32))
+_pstep('compressing step4 handoff (~127 MB, takes a few minutes)')
 OUT = OUT_DIR / 'twin_step4_handoff.npz'; np.savez_compressed(OUT, **B)
 torch.save({'state_dicts': [m.state_dict() for m in TW], 'in_dim': int(Xf_tr.shape[2]), 'roll_dim': int(FT_tr.shape[2]), 'cfg': CFG2, 'twin_cfg': TWIN_CFG}, MODELS_DIR / 'twin_models.pt')
 pickle.dump({'BREF': BREF, 'clin_scaler': sc_clin, 'class_names': CLASS_NAMES, 'clin_cols': list(CLIN_COLS)}, open(MODELS_DIR / 'twin_feature_pipeline.pkl', 'wb'))
@@ -837,11 +870,13 @@ for k in d.files: print(f'  {k:<20} {str(d[k].shape):<16} {d[k].dtype}')
 
 
 # ===================== cell 37 =====================
+_stage(21, 27, 'write matching handoff')
 CLASS_NAMES = ['Burst Suppression', 'Seizure', 'LPD', 'GPD', 'LRDA', 'GRDA', 'Continuous', 'Discontinuous']
 current_hours = list(range(6, 85, 6)); future_hours = list(range(6, 85, 6))
-def _roll_traj(Xf, BM):
+def _roll_traj(Xf, BM, _who=''):
     N = len(Xf); RT = np.full((N, len(current_hours), len(future_hours)), np.nan, np.float32)
-    for ci, h in enumerate(current_hours):
+    for ci, h in enumerate(_bar(current_hours, f'roll-forward {_who}',
+                               total=len(current_hours), unit='hour')):
         RF = np.mean([roll_forward(m, Xf, BM, h)[0] for m in TW], 0)
         valid = BM[:, :h].sum(1) > 0
         for fi, f in enumerate(future_hours):
@@ -855,17 +890,22 @@ def _cum(X_ms, M, ch):
         out[v, ci] = (csum[:, :, s][v] / cnt[v, None]).astype(np.float32)
     return out
 CEB_CH = np.arange(STREAM_SLICES['cebra'].start, STREAM_SLICES['cebra'].stop)
-def _matchpack(X_ms, M):
-    return dict(cebra=_cum(X_ms, M, CEB_CH), protopnet=_cum(X_ms, M, PPNET_CH), proto_acts=_cum(X_ms, M, ACTS_CH),
-                labelfreq=_cum(X_ms, M, PROBS_CH), qeeg=_cum(X_ms, M, EEG_CH))
-rt_tr = _roll_traj(Xf_tr, bmtr); rt_te = _roll_traj(Xf_te, bmte)
-mt_tr = _matchpack(X_ms_tr, M_ms_tr); mt_te = _matchpack(X_ms_te, M_ms_te)
+def _matchpack(X_ms, M, _who=''):
+    streams = [('cebra', CEB_CH), ('protopnet', PPNET_CH), ('proto_acts', ACTS_CH),
+               ('labelfreq', PROBS_CH), ('qeeg', EEG_CH)]
+    return {n: _cum(X_ms, M, ch) for n, ch in
+            _bar(streams, f'matching streams {_who}', total=len(streams), unit='stream')}
+_pstep('rolling the twin forward from each observation hour')
+rt_tr = _roll_traj(Xf_tr, bmtr, 'train'); rt_te = _roll_traj(Xf_te, bmte, 'test')
+_pstep('cumulative block-means per stream, per observation hour')
+mt_tr = _matchpack(X_ms_tr, M_ms_tr, 'train'); mt_te = _matchpack(X_ms_te, M_ms_te, 'test')
 M2 = dict(train_pids=np.array(TRAIN_PIDS), test_pids=np.array(TEST_PIDS),
           y_train=y_train.astype(np.int64), y_test=y_test.astype(np.int64), cpc_train=cpc_train.astype(np.int64), cpc_test=cpc_test.astype(np.int64),
           current_hours=np.array(current_hours), future_hours=np.array(future_hours),
           roll_traj_train=rt_tr, roll_traj_test=rt_te, clin_train=C_train.astype(np.float32), clin_test=C_test.astype(np.float32))
 for k, v in mt_tr.items(): M2[f'{k}_train'] = v.astype(np.float32)
 for k, v in mt_te.items(): M2[f'{k}_test'] = v.astype(np.float32)
+_pstep('compressing matching handoff (~41 MB, takes a minute)')
 OUT2 = OUT_DIR / 'twin_matching_handoff.npz'; np.savez_compressed(OUT2, **M2)
 meta2 = dict(
     roll_traj='shape (N, len(current_hours), len(future_hours)). roll_traj[i, ci, fi] = patient i predicted P(good) at future_hours[fi] given EEG observed up to current_hours[ci]; NaN where future<current or no EEG yet. EXAMPLE: roll_traj_train[i, current_hours.index(36), :] = patient i predicted outcome trajectory from hour 36 onward.',
@@ -879,13 +919,17 @@ for k in d2.files: print(f'  {k:<18} {str(d2[k].shape):<18} {d2[k].dtype}')
 
 
 # ===================== cell 39 =====================
+_stage(22, 27, 'metrics — gather predictions')
 # Metrics — helpers + gather test-set predictions
 # We report on the OFFICIAL 695/299 test split. Positive class = GOOD outcome (CPC 1-2). The digital twin (TW ensemble)
 # is the deployed model; the reference transformer is shown for comparison. Clinically the key operating point is
 # predicting POOR outcome at low false-poor rate (TPR@FPR<=0.05, poor direction = the I-CARE-style metric).
 from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_loss, log_loss, roc_curve, confusion_matrix, matthews_corrcoef
 from sklearn.linear_model import LogisticRegression as _LR
-from IPython.display import display
+try:                                  # notebook-only; plain print outside one
+    from IPython.display import display
+except ImportError:
+    display = print
 import pandas as pd
 def _sig(z): return 1 / (1 + np.exp(-z))
 def _auroc(y, p): return float(roc_auc_score(y, p)) if len(np.unique(y)) > 1 else np.nan
@@ -952,6 +996,7 @@ mref = covO[84]; p_ref = ref_hourly[84]                       # reference full-r
 print('predictions gathered | twin full AUROC', round(_auroc(Y, p_twin), 4), '| reference', round(_auroc(Y[mref], p_ref[mref]), 4))
 
 # ===================== cell 40 =====================
+_stage(23, 27, 'metrics — headline performance')
 # Metrics — headline test performance (full recording) + bootstrap CIs
 MODELS = {'digital twin (raw)': (Y, p_twin), 'digital twin (temp-scaled)': (Y, p_twin_cal), 'reference transformer': (Y[mref], p_ref[mref])}
 tblA = pd.DataFrame({name: core_metrics(y, p) for name, (y, p) in MODELS.items()}).T.round(4)
@@ -972,6 +1017,7 @@ tblCMP = pd.DataFrame(cmp).T
 print('Table B2 — twin vs reference (paired bootstrap difference):'); display(tblCMP)
 
 # ===================== cell 41 =====================
+_stage(24, 27, 'metrics — operating points')
 # Metrics — clinical operating points + threshold table + confusion matrices
 rowsC = []
 for f in [0.01, 0.05, 0.10]:                                  # POOR-outcome direction (I-CARE style: predict poor at low false-poor rate)
@@ -993,6 +1039,7 @@ tblSW.index.name = 'threshold (P good)'
 print('Table D2 — threshold sweep (digital twin, good direction):'); display(tblSW)
 
 # ===================== cell 42 =====================
+_stage(25, 27, 'metrics — hour by hour')
 # Metrics — hour-by-hour (twin + reference)
 def hourly_table(prob_fn):
     rows = {}
@@ -1006,6 +1053,7 @@ tblF = hourly_table(lambda h: (ref_hourly[h], covO[h])); tblF.index.name = 'hour
 print('Table F — hour-by-hour metrics (reference transformer):'); display(tblF)
 
 # ===================== cell 43 =====================
+_stage(26, 27, 'metrics — calibration and roll-forward')
 # Metrics — calibration + digital-twin (roll-forward / forecast)
 tblG = pd.DataFrame({
     'held-out raw': dict(Brier=_brier(yt, p_raw), LogLoss=_logloss(yt, p_raw), ECE=ece(yt, p_raw), cal_slope=cal_slope_intercept(yt, p_raw)[0], cal_intercept=cal_slope_intercept(yt, p_raw)[1], temperature=1.0),
@@ -1024,6 +1072,7 @@ tblI = pd.DataFrame({k: {'forecast_skill_vs_persistence_%': round(v, 2)} for k, 
 print('Table I — forecast head skill vs persistence, per feature group:'); display(tblI)
 
 # ===================== cell 44 =====================
+_stage(27, 27, 'metrics — write tables')
 # Metrics — save all tables to files
 import json as _json
 MET_DIR = METRICS_DIR / 'twin'; MET_DIR.mkdir(parents=True, exist_ok=True)

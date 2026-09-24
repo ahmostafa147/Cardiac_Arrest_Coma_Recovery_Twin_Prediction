@@ -961,7 +961,17 @@ def export(fig, stem, out_dir=None, formats=('html', 'png', 'pdf'),
                            include_plotlyjs=True if selfcontained else 'cdn',
                            post_script=_CAMERA_READOUT if camera_readout else None)
         else:
-            fig.write_image(path, scale=scale)
+            # static export needs a browser engine (kaleido >= 1 shells out to
+            # Chrome). Missing Chrome must not destroy a run whose HTML is
+            # already on disk -- warn and carry on.
+            try:
+                fig.write_image(path, scale=scale)
+            except Exception as e:
+                first = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+                _log_written(f'SKIPPED {os.path.basename(path)} — static export '
+                             f'unavailable ({first}); install with '
+                             f'`plotly_get_chrome -y`')
+                continue
         written.append(path)
         _log_written(f'wrote {os.path.basename(path)}', path)
     return written
